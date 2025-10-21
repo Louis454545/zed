@@ -1,0 +1,42 @@
+[
+  {
+    "context": "Editor",
+    "bindings": {
+      // Select inside quotes - useful for quickly selecting string contents
+      "cmd+'": ["vim::ExecuteVimMotion", { "motion": "viq" }],
+      
+      // Select inside double quotes
+      "cmd+\"": ["vim::ExecuteVimMotion", { "motion": "vi\"" }],
+      
+      // Select around word (including trailing space)
+      "cmd+shift+w": ["vim::ExecuteVimMotion", { "motion": "vaw" }],
+      
+      // Select inside word
+      "cmd+w": ["vim::ExecuteVimMotion", { "motion": "viw" }],
+      
+      // Delete word under cursor
+      "cmd+d": ["vim::ExecuteVimMotion", { "motion": "diw" }],
+      
+      // Yank (copy) inside quotes
+      "cmd+y": ["vim::ExecuteVimMotion", { "motion": "yiq" }],
+      
+      // Change inside parentheses
+      "cmd+shift+9": ["vim::ExecuteVimMotion", { "motion": "ci(" }],
+      
+      // Change inside curly brackets
+      "cmd+shift+[": ["vim::ExecuteVimMotion", { "motion": "ci{" }],
+      
+      // Select inside square brackets
+      "cmd+[": ["vim::ExecuteVimMotion", { "motion": "vi[" }],
+      
+      // Select inside paragraph
+      "cmd+p": ["vim::ExecuteVimMotion", { "motion": "vip" }],
+      
+      // Delete inside sentence
+      "cmd+s": ["vim::ExecuteVimMotion", { "motion": "dis" }],
+      
+      // Select inside tag (for HTML/XML)
+      "cmd+t": ["vim::ExecuteVimMotion", { "motion": "vit" }]
+    }
+  }
+]
