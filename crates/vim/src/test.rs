@@ -24,7 +24,7 @@ pub use vim_test_context::*;
 use indoc::indoc;
 use search::BufferSearchBar;
 
-use crate::{PushSneak, PushSneakBackward, insert::NormalBefore, motion, state::Mode};
+use crate::{PushSneak, PushSneakBackward, insert::NormalBefore, motion, state::Mode, ExecuteVimMotion};
 
 use util_macros::perf;
 
@@ -2318,4 +2318,76 @@ async fn test_clipping_on_mode_change(cx: &mut gpui::TestAppContext) {
         },
         Mode::Normal,
     );
+}
+
+#[perf]
+#[gpui::test]
+async fn test_execute_vim_motion_viq(cx: &mut gpui::TestAppContext) {
+    let mut cx = VimTestContext::new(cx, false).await;
+    cx.set_state("The 'quick brown' fox", Mode::Normal);
+    
+    // Execute viq to select inside quotes
+    cx.update_editor(|editor, window, cx| {
+        editor.handle_action(&ExecuteVimMotion {
+            motion: "viq".to_string(),
+        }, window, cx);
+    });
+    
+    cx.assert_editor_state("The '«quick brownˇ»' fox");
+}
+
+#[perf]
+#[gpui::test]
+async fn test_execute_vim_motion_diw(cx: &mut gpui::TestAppContext) {
+    let mut cx = VimTestContext::new(cx, false).await;
+    cx.set_state("The quick brown fox", Mode::Normal);
+    cx.update_editor(|editor, _, _| {
+        editor.set_selection_range(editor.point_to_offset(Point::new(0, 4), true), true);
+    });
+    
+    // Execute diw to delete inner word
+    cx.update_editor(|editor, window, cx| {
+        editor.handle_action(&ExecuteVimMotion {
+            motion: "diw".to_string(),
+        }, window, cx);
+    });
+    
+    cx.assert_editor_state("The ˇ brown fox");
+}
+
+#[perf]
+#[gpui::test]
+async fn test_execute_vim_motion_vaw(cx: &mut gpui::TestAppContext) {
+    let mut cx = VimTestContext::new(cx, false).await;
+    cx.set_state("The quick brown fox", Mode::Normal);
+    cx.update_editor(|editor, _, _| {
+        editor.set_selection_range(editor.point_to_offset(Point::new(0, 4), true), true);
+    });
+    
+    // Execute vaw to select around word
+    cx.update_editor(|editor, window, cx| {
+        editor.handle_action(&ExecuteVimMotion {
+            motion: "vaw".to_string(),
+        }, window, cx);
+    });
+    
+    cx.assert_editor_state("The «quick ˇ»brown fox");
+}
+
+#[perf]
+#[gpui::test]
+async fn test_execute_vim_motion_yiq(cx: &mut gpui::TestAppContext) {
+    let mut cx = VimTestContext::new(cx, false).await;
+    cx.set_state("The 'quick brown' fox", Mode::Normal);
+    
+    // Execute yiq to yank inside quotes
+    cx.update_editor(|editor, window, cx| {
+        editor.handle_action(&ExecuteVimMotion {
+            motion: "yiq".to_string(),
+        }, window, cx);
+    });
+    
+    // Verify text was yanked by pasting
+    cx.simulate_keystrokes("$ p");
+    cx.assert_editor_state("The 'quick brown' foxquick brownˇ");
 }
