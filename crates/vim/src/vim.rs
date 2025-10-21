@@ -152,6 +152,19 @@ struct PushLiteral {
     prefix: Option<String>,
 }
 
+/// Executes an arbitrary Vim motion sequence from any mode.
+/// 
+/// This allows binding Vim motions to keyboard shortcuts that work
+/// even when not in Vim mode. For example, binding `cmd+'` to `viq`
+/// to select text inside quotes.
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Action)]
+#[action(namespace = vim)]
+#[serde(deny_unknown_fields)]
+pub struct ExecuteVimMotion {
+    /// The Vim motion sequence to execute (e.g., "viq", "ciw", "daw")
+    pub motion: String,
+}
+
 actions!(
     vim,
     [
@@ -270,6 +283,51 @@ pub fn init(cx: &mut App) {
     VimGlobals::register(cx);
 
     cx.observe_new(Vim::register).detach();
+
+    // Register ExecuteVimMotion globally on editors so it works even when Vim is disabled
+    cx.observe_new(|editor: &mut Editor, window, cx| {
+        let subscription = editor.register_action(
+            move |editor: &mut Editor, action: &ExecuteVimMotion, window: &mut Window, cx| {
+                // Get or create a temporary Vim instance if needed
+                if let Some(vim_addon) = editor.addon::<VimAddon>() {
+                    // If Vim is enabled, use the existing instance
+                    vim_addon.entity.update(cx, |vim, cx| {
+                        vim.execute_vim_motion(&action.motion, window, cx)
+                    });
+                } else {
+                    // If Vim is disabled, temporarily enable it, execute, and restore
+                    let was_vim_enabled = Vim::enabled(cx);
+                    if !was_vim_enabled {
+                        // Temporarily create a Vim instance just for this motion
+                        let vim = Vim::new(window, cx);
+                        let original_mode = editor.mode();
+                        
+                        editor.register_addon(VimAddon {
+                            entity: vim.clone(),
+                        });
+                        
+                        vim.update(cx, |vim, cx| {
+                            vim.execute_vim_motion(&action.motion, window, cx);
+                        });
+                        
+                        // Remove the temporary Vim addon
+                        editor.unregister_addon::<VimAddon>();
+                        
+                        // Restore original editor mode if needed
+                        if !original_mode.is_full() {
+                            editor.change_selections(SelectionEffects::no_scroll(), window, cx, |s| {
+                                s.move_with(|_, selection| {
+                                    selection.collapse_to(selection.head(), selection.goal)
+                                })
+                            });
+                        }
+                    }
+                }
+            },
+        );
+        cx.on_release(|_, _| drop(subscription)).detach();
+    })
+    .detach();
 
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &ToggleVimMode, _, cx| {
@@ -915,6 +973,10 @@ impl Vim {
             visual::register(editor, cx);
             change_list::register(editor, cx);
             digraph::register(editor, cx);
+
+            Vim::action(editor, cx, |vim, action: &ExecuteVimMotion, window, cx| {
+                vim.execute_vim_motion(&action.motion, window, cx)
+            });
 
             cx.defer_in(window, |vim, window, cx| {
                 vim.focused(false, window, cx);
@@ -1912,6 +1974,111 @@ impl Vim {
             editor.set_edit_predictions_hidden_for_vim_mode(hide_edit_predictions, window, cx);
         });
         cx.notify()
+    }
+
+    /// Executes an arbitrary Vim motion sequence.
+    /// 
+    /// This allows Vim motions to be executed from any mode, including when
+    /// Vim mode is disabled. The motion string is parsed and executed
+    /// step by step.
+    pub fn execute_vim_motion(
+        &mut self,
+        motion_str: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Save the original mode
+        let original_mode = self.mode;
+        let was_in_vim_mode = matches!(
+            original_mode,
+            Mode::Normal | Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        );
+
+        // Parse and execute each character in the motion string
+        for ch in motion_str.chars() {
+            match ch {
+                // Mode switches
+                'v' => {
+                    if self.mode == Mode::Visual {
+                        // If already in visual mode, toggle back to normal
+                        self.switch_mode(Mode::Normal, false, window, cx);
+                    } else {
+                        self.switch_mode(Mode::Visual, false, window, cx);
+                    }
+                }
+                'V' => {
+                    if self.mode == Mode::VisualLine {
+                        self.switch_mode(Mode::Normal, false, window, cx);
+                    } else {
+                        self.switch_mode(Mode::VisualLine, false, window, cx);
+                    }
+                }
+                // Operators
+                'i' => {
+                    // Inner text object
+                    self.push_operator(Operator::Object { around: false }, window, cx);
+                }
+                'a' => {
+                    // Around text object
+                    self.push_operator(Operator::Object { around: true }, window, cx);
+                }
+                'd' => {
+                    self.push_operator(Operator::Delete, window, cx);
+                }
+                'c' => {
+                    self.push_operator(Operator::Change, window, cx);
+                }
+                'y' => {
+                    self.push_operator(Operator::Yank, window, cx);
+                }
+                // Objects
+                'q' | '\'' | '"' => {
+                    let object = match ch {
+                        'q' | '\'' => Object::Quotes,
+                        '"' => Object::DoubleQuotes,
+                        _ => Object::Quotes,
+                    };
+                    self.normal_object(object, None, false, window, cx);
+                }
+                '`' => {
+                    self.normal_object(Object::BackQuotes, None, false, window, cx);
+                }
+                'w' => {
+                    self.normal_object(Object::Word { ignore_punctuation: false }, None, false, window, cx);
+                }
+                'W' => {
+                    self.normal_object(Object::Word { ignore_punctuation: true }, None, false, window, cx);
+                }
+                'p' => {
+                    self.normal_object(Object::Paragraph, None, false, window, cx);
+                }
+                's' => {
+                    self.normal_object(Object::Sentence, None, false, window, cx);
+                }
+                't' => {
+                    self.normal_object(Object::Tag, None, false, window, cx);
+                }
+                'b' | '(' | ')' => {
+                    self.normal_object(Object::Parentheses, None, false, window, cx);
+                }
+                '[' | ']' => {
+                    self.normal_object(Object::SquareBrackets, None, false, window, cx);
+                }
+                '{' | '}' => {
+                    self.normal_object(Object::CurlyBrackets, None, false, window, cx);
+                }
+                '<' | '>' => {
+                    self.normal_object(Object::AngleBrackets, None, false, window, cx);
+                }
+                // Ignore other characters for now
+                _ => {}
+            }
+        }
+
+        // If we weren't in Vim mode originally, switch back
+        if !was_in_vim_mode && !matches!(self.mode, Mode::Insert) {
+            self.switch_mode(original_mode, false, window, cx);
+        }
     }
 }
 
